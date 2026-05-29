@@ -1,4 +1,4 @@
-name: grotjahn-seg
+name: tomoannotator
 channels:
   - pytorch
   - nvidia

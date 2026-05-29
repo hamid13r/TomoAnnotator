@@ -60,7 +60,7 @@ report.py                 → results/report.md
 
 ```bash
 conda env create -f environment.yml
-conda activate grotjahn-seg
+conda activate tomoannotator
 ```
 
 ---
@@ -157,7 +157,7 @@ python scripts/report.py --predictions results/predictions.csv --push-s3
 ### Create your S3 bucket (once)
 
 ```bash
-aws s3 mb s3://scrippsresearch-grotjahn-hackathon \
+aws s3 mb s3://scrippsresearch-tomoannotator \
     --region us-west-2 --profile <your-profile>
 ```
 
@@ -183,7 +183,7 @@ INSTANCE_ID=$(aws ec2 run-instances \
   --security-group-ids sg-09d5ef7889a26f56a \
   --iam-instance-profile Name=hackathon-ec2-profile \
   --metadata-options HttpTokens=required \
-  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=grotjahn-hackathon}]' \
+  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=tomoannotator-hackathon}]' \
   --profile <your-profile> --region us-west-2 \
   --query 'Instances[0].InstanceId' --output text)
 ```

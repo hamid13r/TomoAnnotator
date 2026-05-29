@@ -3,7 +3,7 @@ Download annotated cryoET tomograms from the CZ cryoET Data Portal.
 Filters for datasets with mitochondria and/or ER annotations.
 
 Usage:
-    python download_czii_portal.py --output-dir /gpfs/scratch/$USER/grotjahn-organelle-seg/raw/czii/
+    python download_czii_portal.py --output-dir /gpfs/scratch/$USER/TomoAnnotator/raw/czii/
     python download_czii_portal.py --output-dir ./data/czii/ --max-runs 5 --organelles mitochondria er
 """
 

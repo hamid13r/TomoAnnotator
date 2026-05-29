@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Download tomograms from EMPIAR via FTP (or Aspera if available).
 # Usage: ./download_empiar.sh <EMPIAR_ID> <OUTPUT_DIR>
-# Example: ./download_empiar.sh 10988 /gpfs/scratch/$USER/grotjahn-organelle-seg/raw/
+# Example: ./download_empiar.sh 10988 /gpfs/scratch/$USER/TomoAnnotator/raw/
 
 set -euo pipefail
 

@@ -5,7 +5,7 @@ All functions accept an optional profile name. When running on EC2 with the
 hackathon-ec2-profile instance profile attached, omit --profile and credentials
 come from the instance metadata service automatically.
 
-Default bucket: scrippsresearch-grotjahn-hackathon  (set GROTJAHN_S3_BUCKET env var to override)
+Default bucket: scrippsresearch-tomoannotator  (set TOMOANNOTATOR_S3_BUCKET env var to override)
 Default region: us-west-2
 """
 
@@ -15,7 +15,7 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
 
-DEFAULT_BUCKET = os.environ.get("GROTJAHN_S3_BUCKET", "scrippsresearch-grotjahn-hackathon")
+DEFAULT_BUCKET = os.environ.get("TOMOANNOTATOR_S3_BUCKET", "scrippsresearch-tomoannotator")
 DEFAULT_REGION = "us-west-2"
 DEFAULT_PROFILE = os.environ.get("AWS_PROFILE", None)   # None → use instance profile on EC2
 

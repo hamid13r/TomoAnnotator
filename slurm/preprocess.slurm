@@ -15,14 +15,14 @@ mkdir -p logs
 module purge
 module load anaconda3   # verify with: module av 2>&1 | grep -i conda
 
-conda activate grotjahn-seg
+conda activate tomoannotator
 
 echo "Job ID:   $SLURM_JOB_ID"
 echo "Node:     $(hostname)"
 echo "Started:  $(date)"
 
 python scripts/preprocess.py \
-    --input-dir  /gpfs/scratch/$USER/grotjahn-organelle-seg/raw/ \
-    --output-dir /gpfs/scratch/$USER/grotjahn-organelle-seg/processed/
+    --input-dir  /gpfs/scratch/$USER/TomoAnnotator/raw/ \
+    --output-dir /gpfs/scratch/$USER/TomoAnnotator/processed/
 
 echo "Finished: $(date)"

@@ -34,6 +34,6 @@ detection:
   min_patches_detected: 3   # min patches above threshold to call feature present
 
 aws:
-  bucket: scrippsresearch-grotjahn-hackathon
+  bucket: scrippsresearch-tomoannotator
   region: us-west-2
   profile: null             # null = use EC2 instance profile; set to your SSO profile on laptop

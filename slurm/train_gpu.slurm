@@ -19,7 +19,7 @@ mkdir -p logs
 module purge
 module load anaconda3
 
-conda activate grotjahn-seg
+conda activate tomoannotator
 
 echo "Job ID:   $SLURM_JOB_ID"
 echo "Node:     $(hostname)"
@@ -28,7 +28,7 @@ echo "Started:  $(date)"
 
 # Step 1: extract patches (CPU-safe, fast)
 python scripts/extract_patches.py \
-    --data-dir /gpfs/scratch/$USER/grotjahn-organelle-seg/processed/ \
+    --data-dir /gpfs/scratch/$USER/TomoAnnotator/processed/ \
     --output   patches.npz
 
 # Step 2: train patch classifier (GPU)
@@ -38,7 +38,7 @@ python scripts/train_patch_classifier.py \
     --epochs     50
 
 # Step 3: sync to S3
-aws s3 sync models/ s3://scrippsresearch-grotjahn-hackathon/models/ --region us-west-2
-aws s3 cp  patches.npz s3://scrippsresearch-grotjahn-hackathon/training/patches.npz --region us-west-2
+aws s3 sync models/ s3://scrippsresearch-tomoannotator/models/ --region us-west-2
+aws s3 cp  patches.npz s3://scrippsresearch-tomoannotator/training/patches.npz --region us-west-2
 
 echo "Finished: $(date)"

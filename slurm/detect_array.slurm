@@ -17,9 +17,9 @@ mkdir -p logs results
 module purge
 module load anaconda3
 
-conda activate grotjahn-seg
+conda activate tomoannotator
 
-DATA_DIR=/gpfs/scratch/$USER/grotjahn-organelle-seg/processed
+DATA_DIR=/gpfs/scratch/$USER/TomoAnnotator/processed
 mapfile -t RUNS < <(ls -1 "$DATA_DIR")
 RUN="${RUNS[$SLURM_ARRAY_TASK_ID]}"
 
