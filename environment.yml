@@ -1,0 +1,29 @@
+name: grotjahn-seg
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch>=2.1
+  - torchvision
+  - pytorch-cuda=11.8
+  - cudatoolkit=11.8
+  - scikit-learn
+  - pandas
+  - numpy
+  - matplotlib
+  - scipy
+  - jupyter
+  - pip:
+    - mrcfile
+    - pynrrd
+    - "napari[all]"
+    - magicgui
+    - cryoet-data-portal
+    - trimesh
+    - pyyaml
+    - tqdm
+    - boto3

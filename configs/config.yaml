@@ -1,0 +1,39 @@
+# Unified config for the tomogram feature detection pipeline
+
+features:
+  # Each entry becomes a class. Order matters — IDs are 1-indexed.
+  # 0 is always background (unpainted regions).
+  - name: mitochondria
+    color: [255, 140, 0]    # orange
+  - name: er
+    color: [0, 191, 255]    # cyan
+  - name: microtubules
+    color: [50, 205, 50]    # green
+  - name: vesicles
+    color: [238, 130, 238]  # violet
+  - name: ribosomes
+    color: [255, 215, 0]    # gold
+  - name: nuclear_envelope
+    color: [255, 99, 71]    # tomato
+
+patches:
+  size: 48                  # cubic patch size in voxels
+  per_class: 300            # patches to extract per feature class per tomogram
+  background_ratio: 1.5     # background patches = per_class × ratio
+
+training:
+  batch_size: 32
+  epochs: 50
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  val_fraction: 0.15        # fraction of patches held out for validation
+
+detection:
+  stride_fraction: 0.5      # sliding window stride = patch_size × stride_fraction
+  confidence_threshold: 0.6 # min confidence to flag a feature as present
+  min_patches_detected: 3   # min patches above threshold to call feature present
+
+aws:
+  bucket: scrippsresearch-grotjahn-hackathon
+  region: us-west-2
+  profile: null             # null = use EC2 instance profile; set to your SSO profile on laptop

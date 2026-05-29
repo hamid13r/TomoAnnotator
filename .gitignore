@@ -1,0 +1,33 @@
+# Data and model artifacts (keep in S3, not git)
+data/raw/
+data/processed/
+patches.npz
+features.npz
+models/*.pth
+models/*.pkl
+results/
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+*.egg
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Conda
+.conda/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Credentials / secrets
+.env
+*.pem
