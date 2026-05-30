@@ -1,6 +1,6 @@
 # Data and model artifacts (keep in S3, not git)
-data/raw/
-data/processed/
+data/*
+!data/.gitkeep
 patches.npz
 features.npz
 models/*.pth
