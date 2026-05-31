@@ -11,7 +11,7 @@ are present in cryoET tomograms. A biologist paints examples of each feature in
 
 ## How it works
 
-1. **Paint** — open 1–2 tomograms in napari, paint a few examples of each feature
+1. **Paint** — open 1–2 tomograms in the built-in matplotlib viewer, paint a few examples of each feature
 2. **Learn** — extract 3D patches from painted regions, train a small 3D CNN (minutes)
 3. **Detect** — slide the trained model across new tomograms → presence/absence report
 4. **Report** — Claude (via Bedrock) summarizes which tomograms are most interesting
@@ -31,7 +31,7 @@ preprocess.py             → data/processed/<run>/tomogram.npy
       │
       ▼
 paint_annotations.py      → data/processed/<run>/annotations.npy
-  (napari GUI, paint once)
+  (matplotlib painting viewer, paint once)
 
       │
       ▼
@@ -59,9 +59,19 @@ report.py                 → results/report.md
 ## Setup
 
 ```bash
+# GPU machine (NVIDIA):
 conda env create -f environment.yml
+# CPU-only laptop (no NVIDIA GPU):
+conda env create -f environment-cpu.yml
+
 conda activate tomoannotator
 ```
+
+The env files use only the `pytorch`, `nvidia`, and `conda-forge` channels
+(plus `nodefaults`) — no access to the Anaconda `defaults` channel is required.
+The GPU env pins `pytorch-cuda=12.1`; if your NVIDIA driver is older, change it
+to `11.8`. If you have no GPU, use `environment-cpu.yml` — only training needs a
+GPU (run that on Garibaldi or EC2); everything else works fine on CPU.
 
 ---
 
@@ -77,24 +87,40 @@ python scripts/preprocess.py --input-dir data/raw/ --output-dir data/processed/ 
 
 Supports subdirectory-per-run or flat directory of .mrc files.
 
-### 2. Paint annotations (napari)
+Each tomogram is **low-pass filtered first, then normalized** (clipped to
+percentiles and z-scored). Filter settings live in `configs/config.yaml` under
+`preprocess.lowpass` — choose `gaussian` (blur by `sigma` voxels) or `fourier`
+(Butterworth low-pass by `cutoff` fraction of Nyquist and `order`), or set
+`enabled: false` to skip filtering.
+
+### 2. Paint annotations (matplotlib viewer)
 
 Open a tomogram and paint examples of each feature. You only need to annotate
 **1–2 tomograms** — you don't need to paint everything, just representative examples.
+The viewer is a lightweight matplotlib window (no napari required).
 
 ```bash
 python scripts/paint_annotations.py --data-dir data/processed/ --run run_001
 ```
 
-The right panel shows the label legend:
+The right-hand panel has a color-coded button per class (configured in
+`configs/config.yaml`):
 - Label **1** = mitochondria (orange)
 - Label **2** = ER (cyan)
 - Label **3** = microtubules (green)
-- etc. (configured in `configs/config.yaml`)
+- etc.
 
-**Napari paint shortcuts:** `Q` = paint, `E` = erase, `[`/`]` = brush size, `Ctrl+Z` = undo
+**Controls:**
+- **Scroll wheel** or the **Z slider** — move through slices
+- **Left-click + drag** — paint the selected class onto the slice
+- **Number keys 0–N** — pick the class (`0` = background/erase)
+- **Brush r slider** (or `[` / `]` keys) — set brush radius in voxels
+- **Erase** button — toggle erase mode; **u** — undo last stroke
+- **Save** button — writes `annotations.npy` for the next step
 
-Click **Save annotations** when done. You can switch runs using the dropdown.
+Annotations are saved as `data/processed/<run>/annotations.npy` (uint8, same
+shape as the tomogram, `0` = background, `1..N` = feature classes) and auto-save
+on window close.
 
 ### 3. Extract patches
 
@@ -192,8 +218,28 @@ INSTANCE_ID=$(aws ec2 run-instances \
 
 ## Configuration
 
-Edit `configs/config.yaml` to add/remove feature classes, change patch size,
-or adjust detection thresholds.
+All scripts read **`configs/config.yaml`** by default, resolved relative to the
+directory you run them from — so run commands from the project root (the folder
+containing `configs/`). Every script also accepts `--config <path>` to point at
+a different file. Edit it to add/remove feature classes, change patch size, or
+adjust detection thresholds; the feature list there defines the paint classes
+(label `1..N`) used everywhere downstream — no code changes needed.
+
+The default config ships with 6 feature classes: mitochondria, ER, microtubules,
+vesicles, ribosomes, nuclear_envelope.
+
+### Expected data layout
+
+`paint_annotations.py` and `extract_patches.py` expect one folder per tomogram:
+
+```
+data/processed/<run_name>/tomogram.npy      # produced by preprocess.py
+data/processed/<run_name>/annotations.npy   # produced by paint_annotations.py
+```
+
+If your tomograms sit loose in `data/processed/` (not inside `<run_name>/`
+subfolders), `paint_annotations.py` will tell you so — re-run `preprocess.py`,
+which writes each volume into its own run folder.
 
 ---
 

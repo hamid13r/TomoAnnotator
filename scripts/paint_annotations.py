@@ -34,8 +34,8 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.widgets import Slider, Button
 
 
-# Three brush radii (in voxels), selectable in the UI.
-BRUSH_SIZES = {"S": 3, "M": 7, "L": 14}
+# Brush radius range (in voxels), controlled by a slider in the UI.
+BRUSH_MIN, BRUSH_MAX, BRUSH_DEFAULT = 1, 30, 7
 
 
 def load_config(path: str = "configs/config.yaml") -> dict:
@@ -54,11 +54,34 @@ def load_tomogram(path: Path) -> np.ndarray:
     return (vol - vol.mean()) / std if std > 0 else vol
 
 
+ANNOTATION_NAME = "annotations.npy"
+
+
+def find_tomogram_in(run_dir: Path) -> Path | None:
+    """Locate the tomogram volume in a run dir.
+
+    Prefers the canonical `tomogram.npy`, but falls back to any single .npy
+    that is NOT the annotation file — so a run whose volume was saved under a
+    different name still works, and we never mistake annotations.npy for the
+    tomogram.
+    """
+    canonical = run_dir / "tomogram.npy"
+    if canonical.exists():
+        return canonical
+    npys = [p for p in sorted(run_dir.glob("*.npy")) if p.name != ANNOTATION_NAME]
+    return npys[0] if npys else None
+
+
+def list_runs(data_dir: Path) -> list[Path]:
+    """All run dirs (subfolders) that contain a tomogram volume."""
+    return [d for d in sorted(data_dir.iterdir())
+            if d.is_dir() and find_tomogram_in(d) is not None]
+
+
 def find_unannotated_run(data_dir: Path) -> str | None:
-    for run_dir in sorted(data_dir.iterdir()):
-        if run_dir.is_dir() and (run_dir / "tomogram.npy").exists():
-            if not (run_dir / "annotations.npy").exists():
-                return run_dir.name
+    for run_dir in list_runs(data_dir):
+        if not (run_dir / ANNOTATION_NAME).exists():
+            return run_dir.name
     return None
 
 
@@ -86,7 +109,7 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
     state = {
         "z": z_pixels // 2,
         "label": 1 if n_classes else 0,   # currently painting this class
-        "brush": "M",
+        "brush": BRUSH_DEFAULT,           # brush radius in voxels
         "erase": False,
         "painting": False,
     }
@@ -94,8 +117,9 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
     lo, hi = np.percentile(tomo, (2, 98))
 
     fig = plt.figure(figsize=(11, 8))
-    ax = fig.add_axes([0.06, 0.16, 0.66, 0.78])
-    ax_slider = fig.add_axes([0.06, 0.07, 0.66, 0.03], facecolor="lightgoldenrodyellow")
+    ax = fig.add_axes([0.06, 0.20, 0.66, 0.74])
+    ax_slider = fig.add_axes([0.06, 0.11, 0.66, 0.03], facecolor="lightgoldenrodyellow")
+    ax_brush = fig.add_axes([0.06, 0.05, 0.66, 0.03], facecolor="lightgoldenrodyellow")
 
     img = ax.imshow(tomo[state["z"]], cmap="gray", origin="lower",
                     aspect="equal", vmin=lo, vmax=hi)
@@ -106,6 +130,8 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
 
     slider_z = Slider(ax_slider, "Z", 0, z_pixels - 1,
                       valinit=state["z"], valstep=1)
+    slider_brush = Slider(ax_brush, "Brush r", BRUSH_MIN, BRUSH_MAX,
+                          valinit=state["brush"], valstep=1)
 
     def current_label() -> int:
         return 0 if state["erase"] else state["label"]
@@ -114,10 +140,9 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
         name = "background (erase)" if current_label() == 0 else feature_names[current_label() - 1]
         ax.set_title(
             f"{run_name}   Z={state['z']}/{z_pixels - 1}   "
-            f"painting: [{current_label()}] {name}   brush={state['brush']} "
-            f"(r={BRUSH_SIZES[state['brush']]})\n"
+            f"painting: [{current_label()}] {name}   brush r={state['brush']}\n"
             "drag to paint · scroll/slider to change slice · keys 0-{} pick class · "
-            "S/M/L brush · u=undo last stroke".format(n_classes),
+            "brush slider or [ / ] to resize · u=undo last stroke".format(n_classes),
             fontsize=9,
         )
 
@@ -133,6 +158,13 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
         refresh()
 
     slider_z.on_changed(on_slider)
+
+    def on_brush(val):
+        state["brush"] = int(slider_brush.val)
+        title()
+        fig.canvas.draw_idle()
+
+    slider_brush.on_changed(on_brush)
 
     def on_scroll(event):
         if event.inaxes is not ax:
@@ -150,7 +182,7 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
         if xdata is None or ydata is None:
             return
         cx, cy = int(round(xdata)), int(round(ydata))
-        r = BRUSH_SIZES[state["brush"]]
+        r = state["brush"]
         z = state["z"]
         sl = ann[z]
         y0, y1 = max(0, cy - r), min(sl.shape[0], cy + r + 1)
@@ -196,10 +228,10 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
                 state["erase"] = (v == 0)
                 title()
                 fig.canvas.draw_idle()
-        elif k.lower() in ("s", "m", "l"):
-            state["brush"] = k.upper()
-            title()
-            fig.canvas.draw_idle()
+        elif k in ("[", "]"):
+            delta = 1 if k == "]" else -1
+            new_r = max(BRUSH_MIN, min(BRUSH_MAX, state["brush"] + delta))
+            slider_brush.set_val(new_r)   # triggers on_brush -> updates state + title
         elif k.lower() == "u":
             if _undo_stack:
                 z, prev = _undo_stack.pop()
@@ -211,24 +243,6 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
     fig.canvas.mpl_connect("key_press_event", on_key)
 
     # ---- buttons ----
-    # Brush size buttons
-    bx, bw, bh = 0.78, 0.06, 0.04
-    ax_bs = fig.add_axes([bx, 0.84, bw, bh])
-    ax_bm = fig.add_axes([bx + 0.065, 0.84, bw, bh])
-    ax_bl = fig.add_axes([bx + 0.13, 0.84, bw, bh])
-    btn_s = Button(ax_bs, "S")
-    btn_m = Button(ax_bm, "M")
-    btn_l = Button(ax_bl, "L")
-
-    def set_brush(name):
-        state["brush"] = name
-        title()
-        fig.canvas.draw_idle()
-
-    btn_s.on_clicked(lambda e: set_brush("S"))
-    btn_m.on_clicked(lambda e: set_brush("M"))
-    btn_l.on_clicked(lambda e: set_brush("L"))
-
     # Class buttons (0..N)
     class_buttons = []
     for i in range(n_classes + 1):
@@ -287,18 +301,50 @@ def main():
     feature_names = [f["name"] for f in features]
 
     data_dir = Path(args.data_dir)
-    run_name = args.run or find_unannotated_run(data_dir)
-    if run_name is None:
-        print("All runs are already annotated.")
+    if not data_dir.exists():
+        print(f"Data directory does not exist: {data_dir}")
         return
+
+    runs = list_runs(data_dir)
+    if not runs:
+        # Distinguish "nothing here" from "all annotated" — the old code
+        # conflated the two and wrongly reported everything as done.
+        loose_npy = [p.name for p in sorted(data_dir.glob("*.npy"))]
+        print(f"No run folders with a tomogram volume found under {data_dir}.")
+        print("Expected layout: <data-dir>/<run_name>/tomogram.npy "
+              "(as produced by preprocess.py).")
+        if loose_npy:
+            print(f"Found loose .npy files directly in {data_dir} "
+                  f"(not inside run folders): {loose_npy}")
+            print("Re-run preprocess.py so each tomogram lands in its own "
+                  "<run_name>/ subfolder, or move them accordingly.")
+        else:
+            print("Run preprocess.py first to create processed tomograms.")
+        return
+
+    if args.run:
+        run_name = args.run
+        if not (data_dir / run_name).is_dir():
+            print(f"Run '{run_name}' not found. Available runs: "
+                  f"{[r.name for r in runs]}")
+            return
+    else:
+        run_name = find_unannotated_run(data_dir)
+        if run_name is None:
+            print(f"All {len(runs)} run(s) already have annotations.npy: "
+                  f"{[r.name for r in runs]}")
+            print("Pass --run <name> to re-open and edit one of them.")
+            return
 
     run_dir = data_dir / run_name
-    tomo_path = run_dir / "tomogram.npy"
-    ann_path = run_dir / "annotations.npy"
+    tomo_path = find_tomogram_in(run_dir)
+    ann_path = run_dir / ANNOTATION_NAME
 
-    if not tomo_path.exists():
-        print(f"Tomogram not found: {tomo_path}")
+    if tomo_path is None:
+        print(f"No tomogram volume (.npy) found in {run_dir}")
         return
+    if tomo_path.name != "tomogram.npy":
+        print(f"Note: using '{tomo_path.name}' as the tomogram volume.")
 
     print(f"Annotating: {run_name}")
     print("Feature classes:")

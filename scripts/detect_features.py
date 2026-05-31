@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn as nn
 import yaml
 from tqdm import tqdm
 
@@ -158,9 +159,6 @@ def process_tomogram(tomo_path: Path, model, class_names, patch_size, device,
         print(f"  Heatmaps saved: {hm_dir}/")
 
     return results
-
-
-import torch.nn as nn  # needed for type hint in detect signature
 
 
 def main():

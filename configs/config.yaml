@@ -15,6 +15,20 @@ features:
     color: [255, 215, 0]    # gold
   - name: nuclear_envelope
     color: [255, 99, 71]    # tomato
+  - name: filaments
+    color: [255, 0, 255]
+
+preprocess:
+  # Low-pass filtering is applied to the raw volume BEFORE normalization.
+  clip_percentile: [5, 95]  # intensity clip percentiles used during normalization
+  lowpass:
+    enabled: true
+    method: gaussian        # "gaussian" or "fourier"
+    # --- gaussian method ---
+    sigma: 1.5              # Gaussian blur sigma in voxels (larger = smoother)
+    # --- fourier method (Butterworth low-pass) ---
+    cutoff: 0.25            # cutoff as a fraction of Nyquist (0-1)
+    order: 2               # Butterworth order (sharpness of the cutoff)
 
 patches:
   size: 48                  # cubic patch size in voxels

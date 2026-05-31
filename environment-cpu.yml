@@ -1,18 +1,17 @@
 name: tomoannotator
+# CPU-only environment — use this on laptops/machines without an NVIDIA GPU.
+# Painting, patch extraction, evaluation and detection all run fine on CPU;
+# only training is slow without a GPU (use Garibaldi or EC2 for that).
 channels:
   - pytorch
-  - nvidia
   - conda-forge
   - nodefaults          # do NOT use the anaconda 'defaults' channel
 dependencies:
   - python=3.10
   - pip
-  # --- PyTorch (GPU) ---
-  # pytorch-cuda pulls in the matching CUDA runtime itself; a separate
-  # cudatoolkit pin is unnecessary and was the source of the solver error.
   - pytorch>=2.1
   - torchvision
-  - pytorch-cuda=12.1   # use 11.8 only if your driver is older; see notes below
+  - cpuonly             # forces the CPU build of PyTorch
   - scikit-learn
   - pandas
   - numpy

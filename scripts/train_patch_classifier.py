@@ -127,8 +127,11 @@ def evaluate(model, loader, criterion, device, class_names):
             per_class_correct[c] += (preds[mask] == c).sum().item()
             per_class_total[c] += mask.sum().item()
 
-    per_class_acc = np.where(per_class_total > 0,
-                             per_class_correct / per_class_total, float("nan"))
+    # Only divide where the class actually has validation samples; classes with
+    # zero samples stay NaN (undefined accuracy) without triggering a 0/0 warning.
+    per_class_acc = np.full(len(class_names), np.nan)
+    nonzero = per_class_total > 0
+    per_class_acc[nonzero] = per_class_correct[nonzero] / per_class_total[nonzero]
     return total_loss / n, correct / n, per_class_acc
 
 
@@ -212,11 +215,13 @@ def main():
                 "patch_size": patches.shape[-1],
             }, out_dir / "patch_classifier.pth")
 
-        # Detailed per-class accuracy every 10 epochs
+        # Detailed per-class accuracy every 10 epochs.
+        # "n/a" = no samples of that class in the validation split (it was not
+        # painted, got 0 patches, or is too rare to land in the 15% val set).
         if epoch % 10 == 0:
-            acc_str = "  ".join(f"{name}={acc:.2f}"
-                                for name, acc in zip(class_names, per_class_acc)
-                                if not np.isnan(acc))
+            acc_str = "  ".join(
+                f"{name}={'n/a' if np.isnan(acc) else f'{acc:.2f}'}"
+                for name, acc in zip(class_names, per_class_acc))
             print(f"       Per-class val acc: {acc_str}")
 
     print(f"\nBest val accuracy: {best_val_acc:.3f}")
