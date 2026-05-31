@@ -30,8 +30,19 @@ preprocess:
     cutoff: 0.25            # cutoff as a fraction of Nyquist (0-1)
     order: 2               # Butterworth order (sharpness of the cutoff)
 
+model:
+  # How patches are shaped and which CNN is trained:
+  #   3d   — cubic patches (patches.size^3), 3D CNN. Full volumetric context.
+  #   2d   — single in-plane square patches (box_2d^2), 2D CNN. Most sample-efficient.
+  #   2.5d — a stack of n_slices adjacent Z-slices (box_2d^2 each) as input
+  #          channels to a 2D CNN. In-plane context + a little Z, avoids the
+  #          worst of the cryoET missing-wedge along Z. Recommended default.
+  type: 2.5d                # 2d | 2.5d | 3d
+  box_2d: 96                # in-plane patch size (voxels) for 2d / 2.5d
+  n_slices: 5               # adjacent Z slices stacked as channels for 2.5d (use 1 for 2d)
+
 patches:
-  size: 48                  # cubic patch size in voxels
+  size: 48                  # cubic patch size in voxels (3d mode only)
   per_class: 300            # patches to extract per feature class per tomogram
   background_ratio: 1.5     # background patches = per_class × ratio
 

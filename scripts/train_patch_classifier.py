@@ -60,13 +60,60 @@ class PatchCNN(nn.Module):
         return self.head(self.encoder(x))
 
 
+class PatchCNN2D(nn.Module):
+    """Lightweight 2D CNN for 2d / 2.5d patch classification.
+
+    `in_channels` is the number of stacked Z-slices (1 for pure 2d, n_slices for
+    2.5d). Same overall design as the 3D variant: conv blocks → global average
+    pool → linear head.
+    """
+    def __init__(self, n_classes: int, in_channels: int = 1, base_channels: int = 32):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            nn.Conv2d(in_channels, base_channels, 3, padding=1), nn.BatchNorm2d(base_channels), nn.ReLU(),
+            nn.Conv2d(base_channels, base_channels, 3, padding=1), nn.BatchNorm2d(base_channels), nn.ReLU(),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(base_channels, base_channels * 2, 3, padding=1), nn.BatchNorm2d(base_channels * 2), nn.ReLU(),
+            nn.Conv2d(base_channels * 2, base_channels * 2, 3, padding=1), nn.BatchNorm2d(base_channels * 2), nn.ReLU(),
+            nn.MaxPool2d(2),
+
+            nn.Conv2d(base_channels * 2, base_channels * 4, 3, padding=1), nn.BatchNorm2d(base_channels * 4), nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1),
+        )
+        self.head = nn.Sequential(
+            nn.Flatten(),
+            nn.Dropout(0.3),
+            nn.Linear(base_channels * 4, n_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.head(self.encoder(x))
+
+
+def build_model(patches: np.ndarray, n_classes: int):
+    """Pick the CNN architecture from the patch tensor rank.
+
+    (N, 1, P, P, P)  -> 5D -> 3D CNN
+    (N, C, H, W)     -> 4D -> 2D CNN with in_channels = C (stacked Z-slices)
+    Returns (model, model_type, in_channels).
+    """
+    if patches.ndim == 5:
+        return PatchCNN(n_classes=n_classes), "3d", 1
+    if patches.ndim == 4:
+        in_ch = patches.shape[1]
+        mtype = "2d" if in_ch == 1 else "2.5d"
+        return PatchCNN2D(n_classes=n_classes, in_channels=in_ch), mtype, in_ch
+    raise ValueError(f"Unexpected patch tensor shape {patches.shape}")
+
+
 # ---------------------------------------------------------------------------
 # Dataset helpers
 # ---------------------------------------------------------------------------
 
 def load_patches(path: Path):
     data = np.load(path)
-    patches = data["patches"].astype(np.float32)   # (N, 1, P, P, P)
+    patches = data["patches"].astype(np.float32)   # (N,1,P,P,P) or (N,C,H,W)
     labels = data["labels"].astype(np.int64)        # (N,)
     class_names = list(data["class_names"])
     return patches, labels, class_names
@@ -179,8 +226,10 @@ def main():
         patches, labels, val_fraction, batch_size)
     print(f"Train: {n_train}  Val: {n_val}")
 
-    model = PatchCNN(n_classes=n_classes).to(device)
+    model, model_type, in_channels = build_model(patches, n_classes)
+    model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model type: {model_type}  (in_channels={in_channels})")
     print(f"Model parameters: {n_params:,}")
 
     criterion = nn.CrossEntropyLoss(weight=weights_tensor)
@@ -212,7 +261,9 @@ def main():
                 "model_state": model.state_dict(),
                 "class_names": class_names,
                 "n_classes": n_classes,
-                "patch_size": patches.shape[-1],
+                "patch_size": patches.shape[-1],   # in-plane size (H/W)
+                "model_type": model_type,          # "3d" | "2d" | "2.5d"
+                "in_channels": in_channels,        # stacked Z-slices (2d/2.5d)
             }, out_dir / "patch_classifier.pth")
 
         # Detailed per-class accuracy every 10 epochs.

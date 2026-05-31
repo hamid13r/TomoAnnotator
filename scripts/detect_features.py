@@ -24,7 +24,7 @@ import torch.nn as nn
 import yaml
 from tqdm import tqdm
 
-from train_patch_classifier import PatchCNN
+from train_patch_classifier import PatchCNN, PatchCNN2D
 
 
 def load_model(checkpoint_path: Path, device: torch.device):
@@ -32,55 +32,72 @@ def load_model(checkpoint_path: Path, device: torch.device):
     class_names = ckpt["class_names"]
     n_classes = ckpt["n_classes"]
     patch_size = ckpt["patch_size"]
+    # Older checkpoints had no model_type → they were 3D.
+    model_type = ckpt.get("model_type", "3d")
+    in_channels = ckpt.get("in_channels", 1)
 
-    model = PatchCNN(n_classes=n_classes).to(device)
+    if model_type == "3d":
+        model = PatchCNN(n_classes=n_classes).to(device)
+    else:
+        model = PatchCNN2D(n_classes=n_classes, in_channels=in_channels).to(device)
+
     model.load_state_dict(ckpt["model_state"])
     model.eval()
-    return model, class_names, patch_size
+    return model, class_names, patch_size, model_type, in_channels
 
 
 @torch.no_grad()
 def detect(tomo: np.ndarray, model: nn.Module, patch_size: int,
-           stride_fraction: float, device: torch.device, batch_size: int = 64
-           ) -> np.ndarray:
+           stride_fraction: float, device: torch.device,
+           model_type: str = "3d", in_channels: int = 1,
+           batch_size: int = 64) -> np.ndarray:
     """
     Slide a window over the tomogram and return a probability heatmap.
     Shape: (n_classes, n_z, n_y, n_x) where each cell is a patch-center probability.
+
+    Geometry depends on model_type:
+      3d        cube patch (patch_size^3), strided in all three axes.
+      2d/2.5d   in-plane patch (patch_size^2) with a stack of `in_channels`
+                adjacent Z-slices; strided in-plane, and along Z by the slice depth.
     """
-    stride = max(1, int(patch_size * stride_fraction))
-    h = patch_size // 2
+    if model_type == "3d":
+        extent = (patch_size, patch_size, patch_size)
+        z_stride = max(1, int(patch_size * stride_fraction))
+    else:
+        extent = (in_channels, patch_size, patch_size)
+        z_stride = max(1, int(in_channels * stride_fraction))
+    ez, ey, ex = extent
+    hz, hy, hx = (e // 2 for e in extent)
+    xy_stride = max(1, int(patch_size * stride_fraction))
 
-    zs = np.arange(h, tomo.shape[0] - patch_size + h + 1, stride)
-    ys = np.arange(h, tomo.shape[1] - patch_size + h + 1, stride)
-    xs = np.arange(h, tomo.shape[2] - patch_size + h + 1, stride)
+    zs = np.arange(hz, tomo.shape[0] - ez + hz + 1, z_stride)
+    ys = np.arange(hy, tomo.shape[1] - ey + hy + 1, xy_stride)
+    xs = np.arange(hx, tomo.shape[2] - ex + hx + 1, xy_stride)
 
-    # Build list of all patch centers
     centers = [(z, y, x) for z in zs for y in ys for x in xs]
 
-    n_classes = None
     all_probs = []
-
-    # Process in batches
     batch_patches = []
-    batch_centers = []
+    is_3d = (model_type == "3d")
 
     def flush_batch():
         if not batch_patches:
             return
-        arr = np.stack(batch_patches)[:, None].astype(np.float32)  # (B, 1, P, P, P)
+        arr = np.stack(batch_patches).astype(np.float32)
+        if is_3d:
+            arr = arr[:, None]                 # (B, 1, P, P, P)
+        # else: (B, C, H, W) already — the Z-stack axis is the channel axis
         tensor = torch.from_numpy(arr).to(device)
         logits = model(tensor)
         probs = torch.softmax(logits, dim=1).cpu().numpy()
         all_probs.append(probs)
         batch_patches.clear()
-        batch_centers.clear()
 
     for z, y, x in tqdm(centers, desc="Detecting", leave=False):
-        patch = tomo[z-h:z-h+patch_size, y-h:y-h+patch_size, x-h:x-h+patch_size]
-        if patch.shape != (patch_size, patch_size, patch_size):
+        patch = tomo[z-hz:z-hz+ez, y-hy:y-hy+ey, x-hx:x-hx+ex]
+        if patch.shape != extent:
             continue
         batch_patches.append(patch)
-        batch_centers.append((z, y, x))
         if len(batch_patches) >= batch_size:
             flush_batch()
     flush_batch()
@@ -91,7 +108,6 @@ def detect(tomo: np.ndarray, model: nn.Module, patch_size: int,
     probs_flat = np.concatenate(all_probs, axis=0)  # (N_patches, n_classes)
     n_classes = probs_flat.shape[1]
 
-    # Build 4D heatmap (n_classes, nz, ny, nx)
     nz, ny, nx = len(zs), len(ys), len(xs)
     heatmap = probs_flat.reshape(nz, ny, nx, n_classes).transpose(3, 0, 1, 2)
     return heatmap, (zs, ys, xs)
@@ -174,10 +190,12 @@ def print_results(run_name: str, results: list[dict]):
 
 def process_tomogram(tomo_path: Path, model, class_names, patch_size, device,
                      stride_fraction, confidence_threshold, min_patches,
+                     model_type: str = "3d", in_channels: int = 1,
                      save_heatmaps: bool = False,
                      save_segmentation: bool = True) -> list[dict]:
     tomo = np.load(tomo_path).astype(np.float32)
-    heatmap, (zs, ys, xs) = detect(tomo, model, patch_size, stride_fraction, device)
+    heatmap, (zs, ys, xs) = detect(tomo, model, patch_size, stride_fraction, device,
+                                   model_type=model_type, in_channels=in_channels)
     results = summarize(heatmap, zs, class_names, confidence_threshold, min_patches)
 
     if save_segmentation:
@@ -225,8 +243,10 @@ def main():
     print(f"Device: {device}")
 
     ckpt_path = Path(args.model_dir) / "patch_classifier.pth"
-    model, class_names, patch_size = load_model(ckpt_path, device)
-    print(f"Model loaded: {ckpt_path}  classes={class_names}  patch={patch_size}^3")
+    model, class_names, patch_size, model_type, in_channels = load_model(ckpt_path, device)
+    geom_str = (f"{patch_size}^3" if model_type == "3d"
+                else f"{in_channels}×{patch_size}² ({model_type})")
+    print(f"Model loaded: {ckpt_path}  classes={class_names}  patch={geom_str}")
 
     if args.tomogram:
         tomo_paths = [Path(args.tomogram)]
@@ -243,6 +263,7 @@ def main():
             stride_fraction=det_cfg["stride_fraction"],
             confidence_threshold=det_cfg["confidence_threshold"],
             min_patches=det_cfg["min_patches_detected"],
+            model_type=model_type, in_channels=in_channels,
             save_heatmaps=args.save_heatmaps,
             save_segmentation=args.save_segmentation,
         )

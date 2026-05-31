@@ -12,7 +12,7 @@ are present in cryoET tomograms. A biologist paints examples of each feature in
 ## How it works
 
 1. **Paint** — open 1–2 tomograms in the built-in matplotlib viewer, paint a few examples of each feature
-2. **Learn** — extract 3D patches from painted regions, train a small 3D CNN (minutes)
+2. **Learn** — extract patches from painted regions, train a small CNN (2D / 2.5D / 3D, configurable; minutes)
 3. **Detect** — slide the trained model across new tomograms → presence/absence report
 4. **Report** — Claude (via Bedrock) summarizes which tomograms are most interesting
 
@@ -36,12 +36,12 @@ paint_annotations.py      → data/processed/<run>/annotations.npy
       │
       ▼
 extract_patches.py        → patches.npz
-  (3D patches from painted regions + background)
+  (patches from painted regions + background; 2D/2.5D/3D per config)
 
       │
       ▼
 train_patch_classifier.py → models/patch_classifier.pth
-  (3D CNN, ~5–15 min on GPU)
+  (2D/2.5D/3D CNN, ~5–15 min on GPU)
 
       │
       ▼
@@ -146,6 +146,25 @@ sbatch slurm/train_gpu.slurm
 Training is fast (~5–15 min for 50 epochs on one GPU). Watch per-class validation
 accuracy — if a class stays near 0, you need more painted examples for that class.
 
+#### 2D / 2.5D vs 3D models
+
+The `model` section of `configs/config.yaml` chooses how patches are shaped and
+which CNN is trained — set it **before** running `extract_patches.py` (the choice
+is baked into `patches.npz` and carried through training and detection
+automatically):
+
+- `type: 3d` — cubic patches (`patches.size`³), full 3D CNN. Best volumetric
+  context; most expensive; fewer training samples per painted voxel.
+- `type: 2d` — single in-plane square patches (`box_2d`²), 2D CNN. Most
+  sample-efficient and fastest.
+- `type: 2.5d` *(default)* — a stack of `n_slices` adjacent Z-slices (`box_2d`²
+  each) fed as input channels to a 2D CNN. Keeps large in-plane context with a
+  little Z, and sidesteps the worst of the cryoET missing-wedge along Z.
+
+To A/B them on the same painted data, just change `model.type`, re-run
+`extract_patches.py` → `train_patch_classifier.py` → `detect_features.py`. No
+code or flag changes needed.
+
 ### 5. Detect features in new tomograms
 
 ```bash
@@ -244,8 +263,8 @@ a different file. Edit it to add/remove feature classes, change patch size, or
 adjust detection thresholds; the feature list there defines the paint classes
 (label `1..N`) used everywhere downstream — no code changes needed.
 
-The default config ships with 6 feature classes: mitochondria, ER, microtubules,
-vesicles, ribosomes, nuclear_envelope.
+The default config ships with 7 feature classes: mitochondria, ER, microtubules,
+vesicles, ribosomes, nuclear_envelope, filaments.
 
 ### Expected data layout
 
