@@ -166,6 +166,25 @@ python scripts/detect_features.py \
 sbatch slurm/detect_array.slurm
 ```
 
+By default `detect_features.py` also writes a **`segmentation.npy`** next to each
+tomogram: a uint8 label volume the same shape as the tomogram (`0` = background,
+`1..N` = predicted classes, in config order — the same format as a painted
+`annotations.npy`). Disable with `--no-segmentation`.
+
+### 5b. View the detection overlay
+
+Inspect what was classified as what, overlaid on the tomogram in the same style
+as the painting viewer (overlay starts hidden — press `o` or the button to show):
+
+```bash
+python scripts/view_segmentation.py --run-dir data/processed/new_run
+```
+
+Scroll / Z slider to move through slices, opacity slider to fade the overlay.
+This viewer is read-only. Because the labels share the painting format, you can
+also re-open a `segmentation.npy` in `paint_annotations.py` to correct it and
+feed it back into training.
+
 ### 6. Generate Bedrock report
 
 ```bash

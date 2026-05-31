@@ -129,6 +129,35 @@ def summarize(heatmap: np.ndarray, zs: np.ndarray, class_names: list[str],
     return results
 
 
+def build_segmentation(heatmap: np.ndarray, zs, ys, xs, tomo_shape,
+                       confidence_threshold: float) -> np.ndarray:
+    """Turn the per-class heatmap into a full-resolution label volume.
+
+    For each patch-center grid cell we take the argmax class (0 = background,
+    1..N = features, matching the config order and the painting annotations).
+    Cells whose top probability is below `confidence_threshold` are set to
+    background. The coarse grid is then expanded to the tomogram's full shape by
+    nearest-neighbour assignment, so the output is a uint8 volume the same shape
+    as the tomogram — directly comparable to a painted annotations.npy.
+    """
+    n_classes = heatmap.shape[0]
+    coarse = heatmap.argmax(axis=0).astype(np.uint8)      # (nz, ny, nx)
+    top_prob = heatmap.max(axis=0)
+    coarse[top_prob < confidence_threshold] = 0           # low confidence -> background
+
+    def nearest_index(full_n, centers):
+        coords = np.arange(full_n)
+        pos = np.clip(np.searchsorted(centers, coords), 1, len(centers) - 1)
+        left, right = centers[pos - 1], centers[pos]
+        return np.where(np.abs(coords - left) <= np.abs(coords - right), pos - 1, pos)
+
+    zi = nearest_index(tomo_shape[0], np.asarray(zs))
+    yi = nearest_index(tomo_shape[1], np.asarray(ys))
+    xi = nearest_index(tomo_shape[2], np.asarray(xs))
+    seg = coarse[np.ix_(zi, yi, xi)]
+    return seg.astype(np.uint8)
+
+
 def print_results(run_name: str, results: list[dict]):
     print(f"\n{'─'*60}")
     print(f"  {run_name}")
@@ -145,10 +174,19 @@ def print_results(run_name: str, results: list[dict]):
 
 def process_tomogram(tomo_path: Path, model, class_names, patch_size, device,
                      stride_fraction, confidence_threshold, min_patches,
-                     save_heatmaps: bool = False) -> list[dict]:
+                     save_heatmaps: bool = False,
+                     save_segmentation: bool = True) -> list[dict]:
     tomo = np.load(tomo_path).astype(np.float32)
     heatmap, (zs, ys, xs) = detect(tomo, model, patch_size, stride_fraction, device)
     results = summarize(heatmap, zs, class_names, confidence_threshold, min_patches)
+
+    if save_segmentation:
+        seg = build_segmentation(heatmap, zs, ys, xs, tomo.shape, confidence_threshold)
+        seg_path = tomo_path.parent / "segmentation.npy"
+        np.save(seg_path, seg)
+        present = ", ".join(f"{class_names[c]}={int((seg == c).sum())}"
+                            for c in np.unique(seg) if c != 0) or "nothing above threshold"
+        print(f"  Segmentation saved: {seg_path}  [{present}]")
 
     if save_heatmaps:
         hm_dir = tomo_path.parent / "heatmaps"
@@ -171,6 +209,10 @@ def main():
     parser.add_argument("--output-csv", default=None)
     parser.add_argument("--save-heatmaps", action="store_true",
                         help="Save per-feature probability maps alongside tomogram")
+    parser.add_argument("--save-segmentation", action="store_true", default=True,
+                        help="Save a full-size label volume segmentation.npy (default: on)")
+    parser.add_argument("--no-segmentation", dest="save_segmentation",
+                        action="store_false")
     parser.add_argument("--push-s3", action="store_true")
     parser.add_argument("--bucket", default=None)
     parser.add_argument("--aws-profile", default=None)
@@ -202,6 +244,7 @@ def main():
             confidence_threshold=det_cfg["confidence_threshold"],
             min_patches=det_cfg["min_patches_detected"],
             save_heatmaps=args.save_heatmaps,
+            save_segmentation=args.save_segmentation,
         )
         print_results(run_name, results)
         for r in results:
