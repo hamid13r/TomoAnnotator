@@ -12,10 +12,11 @@ Output:
                    'labels':  (N,) int64,
                    'class_names': [...]}
 
-Patches are stored as float16 to roughly halve memory/disk vs float32, so you
-can extract ~2× as many patches for the same footprint. Augmentation still runs
-in float32 for numerical stability; only the stored result is downcast. Training
-upcasts each batch back to float32 on the fly.
+Patches are stored as float16 by default to roughly halve memory/disk vs float32,
+so you can extract ~2× as many patches for the same footprint. Pass
+`--dtype float32` for full precision. Augmentation always runs in float32 for
+numerical stability; only the stored result is cast. Training upcasts each batch
+back to float32 on the fly, so either stored dtype trains identically.
 
 Usage:
     python extract_patches.py --data-dir data/processed/ --output patches.npz
@@ -139,6 +140,11 @@ def main():
     parser.add_argument("--augment", action="store_true", default=True,
                         help="Apply augmentation (default: on)")
     parser.add_argument("--no-augment", dest="augment", action="store_false")
+    parser.add_argument("--dtype", choices=["float16", "float32"], default="float16",
+                        help="Storage dtype for patches. float16 (default) halves "
+                             "memory/disk so ~2x more patches fit; float32 keeps full "
+                             "precision. Augmentation always runs in float32; this only "
+                             "sets what gets stored. Training upcasts per-batch either way.")
     parser.add_argument("--push-s3", action="store_true")
     parser.add_argument("--bucket", default=None)
     parser.add_argument("--profile", default=None)
@@ -151,9 +157,12 @@ def main():
     bg_ratio = cfg["patches"]["background_ratio"]
     n_bg = int(per_class * bg_ratio)
 
+    store_dtype = np.float16 if args.dtype == "float16" else np.float32
+
     geom = resolve_geometry(cfg)
     extent, half = geom["extent"], geom["half"]
-    print(f"Model type: {geom['type']}   patch extent (Z,Y,X)={extent}")
+    print(f"Model type: {geom['type']}   patch extent (Z,Y,X)={extent}   "
+          f"storage dtype: {args.dtype}")
 
     data_dir = Path(args.data_dir)
     annotated_runs = sorted([
@@ -171,7 +180,7 @@ def main():
     # How many variants augment() produces per patch (probe once with a dummy).
     aug_factor = len(augment(np.zeros(extent, dtype=np.float32))) if args.augment else 1
     voxels_per_patch = int(np.prod(extent))
-    bytes_per_patch = voxels_per_patch * 2  # float16
+    bytes_per_patch = voxels_per_patch * np.dtype(store_dtype).itemsize
 
     # Rough UPPER bound: assumes every class hits its per_class cap in every run.
     n_feat = len(features)
@@ -211,9 +220,9 @@ def main():
                 if patch is None:
                     continue
                 variants = augment(patch) if args.augment else [patch]
-                # Downcast to float16 here so the accumulating list (the peak
-                # memory user) stays half the size — augmentation ran in float32.
-                all_patches.extend(v.astype(np.float16) for v in variants)
+                # Cast to the chosen storage dtype here so the accumulating list
+                # (the peak memory user) is already downcast — augment ran in float32.
+                all_patches.extend(v.astype(store_dtype) for v in variants)
                 all_labels.extend([class_id] * len(variants))
 
         # Background class (0): sample from regions painted as 0 AND far from any annotation
@@ -230,7 +239,7 @@ def main():
             if patch is None:
                 continue
             variants = augment(patch) if args.augment else [patch]
-            all_patches.extend(v.astype(np.float16) for v in variants)
+            all_patches.extend(v.astype(store_dtype) for v in variants)
             all_labels.extend([0] * len(variants))
 
     if not all_patches:
