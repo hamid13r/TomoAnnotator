@@ -8,9 +8,14 @@ For each annotated run:
   - Apply augmentation to balance and diversify the dataset
 
 Output:
-    patches.npz — {'patches': (N, 1, P, P, P) float32,
+    patches.npz — {'patches': (N, 1, P, P, P) float16,
                    'labels':  (N,) int64,
                    'class_names': [...]}
+
+Patches are stored as float16 to roughly halve memory/disk vs float32, so you
+can extract ~2× as many patches for the same footprint. Augmentation still runs
+in float32 for numerical stability; only the stored result is downcast. Training
+upcasts each batch back to float32 on the fly.
 
 Usage:
     python extract_patches.py --data-dir data/processed/ --output patches.npz
@@ -166,7 +171,7 @@ def main():
     # How many variants augment() produces per patch (probe once with a dummy).
     aug_factor = len(augment(np.zeros(extent, dtype=np.float32))) if args.augment else 1
     voxels_per_patch = int(np.prod(extent))
-    bytes_per_patch = voxels_per_patch * 4  # float32
+    bytes_per_patch = voxels_per_patch * 2  # float16
 
     # Rough UPPER bound: assumes every class hits its per_class cap in every run.
     n_feat = len(features)
@@ -206,7 +211,9 @@ def main():
                 if patch is None:
                     continue
                 variants = augment(patch) if args.augment else [patch]
-                all_patches.extend(variants)
+                # Downcast to float16 here so the accumulating list (the peak
+                # memory user) stays half the size — augmentation ran in float32.
+                all_patches.extend(v.astype(np.float16) for v in variants)
                 all_labels.extend([class_id] * len(variants))
 
         # Background class (0): sample from regions painted as 0 AND far from any annotation
@@ -223,7 +230,7 @@ def main():
             if patch is None:
                 continue
             variants = augment(patch) if args.augment else [patch]
-            all_patches.extend(variants)
+            all_patches.extend(v.astype(np.float16) for v in variants)
             all_labels.extend([0] * len(variants))
 
     if not all_patches:
@@ -247,7 +254,7 @@ def main():
     # Stats
     mem_gb = patches_arr.nbytes / 1e9
     print(f"\nTotal patches: {len(patches_arr)}  shape={patches_arr.shape}  "
-          f"({mem_gb:.2f} GB float32 in memory)")
+          f"dtype={patches_arr.dtype}  ({mem_gb:.2f} GB in memory)")
     for c, name in enumerate(feature_names):
         n = (labels_arr == c).sum()
         print(f"  class {c} ({name}): {n} patches")

@@ -113,7 +113,10 @@ def build_model(patches: np.ndarray, n_classes: int):
 
 def load_patches(path: Path):
     data = np.load(path)
-    patches = data["patches"].astype(np.float32)   # (N,1,P,P,P) or (N,C,H,W)
+    # Keep patches in their stored dtype (float16) to halve host RAM so more
+    # patches fit; each batch is upcast to float32 on device in the train/eval
+    # loops. np.float32 patches still load fine (no-op view).
+    patches = data["patches"]                       # (N,1,P,P,P) or (N,C,H,W), float16
     labels = data["labels"].astype(np.int64)        # (N,)
     class_names = list(data["class_names"])
     return patches, labels, class_names
@@ -142,7 +145,7 @@ def train_epoch(model, loader, optimizer, criterion, device):
     model.train()
     total_loss, correct, n = 0.0, 0, 0
     for x, y in loader:
-        x, y = x.to(device), y.to(device)
+        x, y = x.to(device).float(), y.to(device)   # upcast float16 patches
         optimizer.zero_grad()
         logits = model(x)
         loss = criterion(logits, y)
@@ -162,7 +165,7 @@ def evaluate(model, loader, criterion, device, class_names):
     per_class_total = np.zeros(len(class_names))
 
     for x, y in loader:
-        x, y = x.to(device), y.to(device)
+        x, y = x.to(device).float(), y.to(device)   # upcast float16 patches
         logits = model(x)
         loss = criterion(logits, y)
         total_loss += loss.item() * len(y)
