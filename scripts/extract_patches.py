@@ -56,8 +56,13 @@ def resolve_geometry(cfg: dict) -> dict:
         n_slices = 1 if mtype == "2d" else int(model_cfg.get("n_slices", 5))
         n_slices = max(1, n_slices)
         extent = (n_slices, box, box)
+    elif mtype == "slice":
+        # Whole-slice classification: each sample is one full Z-slice resized to
+        # slice_box × slice_box, fed to a 2D CNN as a single channel.
+        box = int(model_cfg.get("slice_box", 256))
+        extent = (1, box, box)
     else:
-        raise ValueError(f"Unknown model.type {mtype!r} (use 3d, 2d, or 2.5d)")
+        raise ValueError(f"Unknown model.type {mtype!r} (use 3d, 2d, 2.5d, or slice)")
 
     half = tuple(e // 2 for e in extent)
     return {"type": mtype, "extent": extent, "half": half}
@@ -132,6 +137,80 @@ def sample_centers(mask: np.ndarray, n: int, extent, half) -> np.ndarray:
     return np.stack([zs[idx], ys[idx], xs[idx]], axis=1)
 
 
+def resize_slice(sl: np.ndarray, box: int, order: int = 1) -> np.ndarray:
+    """Resize a 2D slice to (box, box) with spline interpolation."""
+    from scipy.ndimage import zoom
+    fy, fx = box / sl.shape[0], box / sl.shape[1]
+    out = zoom(sl.astype(np.float32), (fy, fx), order=order)
+    # zoom can be off-by-one; crop/pad to exact box.
+    out = out[:box, :box]
+    if out.shape != (box, box):
+        padded = np.zeros((box, box), dtype=np.float32)
+        padded[:out.shape[0], :out.shape[1]] = out
+        out = padded
+    return out
+
+
+def slice_label(ann_slice: np.ndarray, n_classes: int, label_fraction: float) -> int | None:
+    """Decide a single class for a whole Z-slice from its painted voxels.
+
+    Returns:
+        0          if the slice has essentially no paint (background sample),
+        1..N       if a single feature class dominates the painted voxels,
+        None       if the slice is painted but ambiguous (mixed classes) — skip it.
+    """
+    painted = ann_slice[ann_slice > 0]
+    if painted.size == 0:
+        return 0
+    counts = np.bincount(painted, minlength=n_classes + 1)
+    dominant = int(counts.argmax())
+    if counts[dominant] / painted.size >= label_fraction:
+        return dominant
+    return None
+
+
+def extract_slices(annotated_runs, features, box, label_fraction,
+                   bg_slice_ratio, do_augment, store_dtype):
+    """Whole-slice extraction: each painted slice → one resized 2D sample.
+
+    Returns (patches_list, labels_list). Patches are shaped (1, box, box) so the
+    leading axis is the single input channel of the 2D CNN.
+    """
+    n_classes = len(features)
+    feature_names = ["background"] + [f["name"] for f in features]
+    patches, labels = [], []
+
+    for run_dir in tqdm(annotated_runs, desc="Runs"):
+        tomo = np.load(run_dir / "tomogram.npy").astype(np.float32)
+        ann = np.load(run_dir / "annotations.npy").astype(np.uint8)
+
+        feature_slices, bg_slices = [], []
+        for z in range(ann.shape[0]):
+            lab = slice_label(ann[z], n_classes, label_fraction)
+            if lab is None:
+                continue
+            (bg_slices if lab == 0 else feature_slices).append((z, lab))
+
+        # Keep background slices in proportion to the feature slices we found.
+        n_bg_keep = int(len(feature_slices) * bg_slice_ratio)
+        if len(bg_slices) > n_bg_keep and n_bg_keep >= 0:
+            idx = np.random.choice(len(bg_slices), size=n_bg_keep, replace=False)
+            bg_slices = [bg_slices[i] for i in sorted(idx)]
+
+        chosen = feature_slices + bg_slices
+        cnt = {}
+        for z, lab in chosen:
+            cnt[lab] = cnt.get(lab, 0) + 1
+            resized = resize_slice(tomo[z], box)[None, ...]   # (1, box, box)
+            variants = augment(resized) if do_augment else [resized]
+            patches.extend(v.astype(store_dtype) for v in variants)
+            labels.extend([lab] * len(variants))
+        summary = ", ".join(f"{feature_names[c]}={n}" for c, n in sorted(cnt.items()))
+        print(f"  [{run_dir.name}] slices kept: {summary or 'none'}")
+
+    return patches, labels
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", required=True)
@@ -176,6 +255,52 @@ def main():
         return
 
     print(f"Found {len(annotated_runs)} annotated run(s): {[p.name for p in annotated_runs]}")
+
+    # ---- Whole-slice mode: each painted slice is one resized 2D sample ----
+    if geom["type"] == "slice":
+        box = extent[1]
+        patches_cfg = cfg["patches"]
+        label_fraction = float(patches_cfg.get("slice_label_fraction", 0.5))
+        bg_slice_ratio = float(patches_cfg.get("background_slice_ratio", 1.0))
+        print(f"Whole-slice mode: resize to {box}×{box}, "
+              f"label_fraction={label_fraction}, bg_slice_ratio={bg_slice_ratio}")
+
+        all_patches, all_labels = extract_slices(
+            annotated_runs, features, box, label_fraction,
+            bg_slice_ratio, args.augment, store_dtype)
+
+        if not all_patches:
+            print("No slices extracted. Did you paint/fill whole slices?")
+            return
+
+        patches_arr = np.stack(all_patches)              # (N, 1, box, box)
+        labels_arr = np.array(all_labels, dtype=np.int64)
+        idx = np.random.permutation(len(patches_arr))
+        patches_arr, labels_arr = patches_arr[idx], labels_arr[idx]
+
+        mem_gb = patches_arr.nbytes / 1e9
+        print(f"\nTotal slices: {len(patches_arr)}  shape={patches_arr.shape}  "
+              f"dtype={patches_arr.dtype}  ({mem_gb:.2f} GB in memory)")
+        for c, name in enumerate(feature_names):
+            print(f"  class {c} ({name}): {(labels_arr == c).sum()} samples")
+
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(out, patches=patches_arr, labels=labels_arr,
+                            class_names=np.array(feature_names),
+                            model_type=np.array("slice"),
+                            extent=np.array(extent),
+                            n_slices=np.array(1),
+                            box=np.array(box))
+        print(f"\nSaved: {out}  (model_type=slice, shape={patches_arr.shape})")
+
+        if args.push_s3:
+            from aws_utils import ensure_bucket, upload, DEFAULT_BUCKET
+            bucket = args.bucket or DEFAULT_BUCKET
+            ensure_bucket(bucket, args.profile)
+            upload(out, f"training/{out.name}", bucket=bucket, profile=args.profile)
+        print("Next: python train_patch_classifier.py --patches patches.npz")
+        return
 
     # How many variants augment() produces per patch (probe once with a dummy).
     aug_factor = len(augment(np.zeros(extent, dtype=np.float32))) if args.augment else 1

@@ -17,9 +17,19 @@ features:
     color: [255, 99, 71]    # tomato
   - name: filaments
     color: [255, 0, 255]
+  - name: granules
+    color: [70, 130, 180]    # steel blue
+  - name: junk_frost
+    color: [128, 128, 128]   # gray — ice contamination / frost / junk to reject
 
 preprocess:
-  # Low-pass filtering is applied to the raw volume BEFORE normalization.
+  # Rescaling is applied FIRST, to bring tomograms onto a common voxel size.
+  rescale:
+    enabled: true
+    output_pixel_size: 20.0   # target voxel size in Angstroms (common scale for all runs)
+    input_pixel_size: null    # null = read from MRC/NRRD header; set a number to override
+    order: 1                  # interpolation order for resampling (0=nearest, 1=linear, 3=cubic)
+  # Low-pass filtering is applied to the (rescaled) volume BEFORE normalization.
   clip_percentile: [5, 95]  # intensity clip percentiles used during normalization
   lowpass:
     enabled: true
@@ -32,19 +42,28 @@ preprocess:
 
 model:
   # How patches are shaped and which CNN is trained:
-  #   3d   — cubic patches (patches.size^3), 3D CNN. Full volumetric context.
-  #   2d   — single in-plane square patches (box_2d^2), 2D CNN. Most sample-efficient.
-  #   2.5d — a stack of n_slices adjacent Z-slices (box_2d^2 each) as input
-  #          channels to a 2D CNN. In-plane context + a little Z, avoids the
-  #          worst of the cryoET missing-wedge along Z. Recommended default.
-  type: 2.5d                # 2d | 2.5d | 3d
+  #   3d    — cubic patches (patches.size^3), 3D CNN. Full volumetric context.
+  #   2d    — single in-plane square patches (box_2d^2), 2D CNN. Most sample-efficient.
+  #   2.5d  — a stack of n_slices adjacent Z-slices (box_2d^2 each) as input
+  #           channels to a 2D CNN. In-plane context + a little Z, avoids the
+  #           worst of the cryoET missing-wedge along Z. Recommended default.
+  #   slice — whole-slice classification. You paint/fill entire Z-slices with one
+  #           class; each painted slice (resized to slice_box) is one 2D training
+  #           sample. Best for screening presence/absence, incl. junk/frost.
+  type: 2.5d                # 2d | 2.5d | 3d | slice
   box_2d: 96                # in-plane patch size (voxels) for 2d / 2.5d
   n_slices: 5               # adjacent Z slices stacked as channels for 2.5d (use 1 for 2d)
+  slice_box: 256            # full slices are resized to slice_box × slice_box for "slice" mode
 
 patches:
   size: 48                  # cubic patch size in voxels (3d mode only)
   per_class: 300            # patches to extract per feature class per tomogram
   background_ratio: 1.5     # background patches = per_class × ratio
+  # "slice" mode only: a Z-slice is assigned a feature class if at least this
+  # fraction of its painted voxels belong to that class; otherwise, if the slice
+  # has essentially no paint it becomes a background sample.
+  slice_label_fraction: 0.5
+  background_slice_ratio: 1.0  # background slices kept = (#feature slices) × ratio
 
 training:
   batch_size: 32
@@ -57,6 +76,9 @@ detection:
   stride_fraction: 0.5      # sliding window stride = patch_size × stride_fraction
   confidence_threshold: 0.6 # min confidence to flag a feature as present
   min_patches_detected: 3   # min patches above threshold to call feature present
+  # "slice" mode: every Z-slice is classified whole; a feature is called present
+  # if at least this many slices exceed confidence_threshold.
+  min_slices_detected: 2
 
 aws:
   bucket: scrippsresearch-tomoannotator

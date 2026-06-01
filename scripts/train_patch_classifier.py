@@ -119,7 +119,10 @@ def load_patches(path: Path):
     patches = data["patches"]                       # (N,1,P,P,P) or (N,C,H,W), float16
     labels = data["labels"].astype(np.int64)        # (N,)
     class_names = list(data["class_names"])
-    return patches, labels, class_names
+    # model_type recorded by extract_patches (e.g. "slice"); falls back to None
+    # so build_model derives it from the tensor rank for older files.
+    stored_type = str(data["model_type"]) if "model_type" in data else None
+    return patches, labels, class_names, stored_type
 
 
 def make_loaders(patches: np.ndarray, labels: np.ndarray,
@@ -215,7 +218,7 @@ def main():
     if device.type == "cuda":
         print(f"GPU:    {torch.cuda.get_device_name(0)}")
 
-    patches, labels, class_names = load_patches(Path(args.patches))
+    patches, labels, class_names, stored_type = load_patches(Path(args.patches))
     n_classes = len(class_names)
     print(f"Classes ({n_classes}): {class_names}")
     print(f"Patches: {len(patches)}  shape={patches.shape[1:]}")
@@ -230,6 +233,10 @@ def main():
     print(f"Train: {n_train}  Val: {n_val}")
 
     model, model_type, in_channels = build_model(patches, n_classes)
+    # Whole-slice mode uses the same 2D CNN as "2d" (single channel); the stored
+    # type tells detection to classify whole slices rather than slide patches.
+    if stored_type == "slice":
+        model_type = "slice"
     model = model.to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model type: {model_type}  (in_channels={in_channels})")

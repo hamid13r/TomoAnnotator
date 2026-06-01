@@ -13,6 +13,10 @@ or the keys 1/2/3 on the numpad-style brush row (see buttons). An Erase button
 toggles erase mode (equivalent to painting with class 0), and Save writes the
 annotation to disk for the next pipeline step.
 
+To label a WHOLE slice at once — the workflow for whole-slice training
+(model.type: slice) and for marking junk/frost contamination — press "f" or
+click "Fill slice" to set the entire current Z-slice to the selected class.
+
 Painted labels are saved as:
     data/processed/<run_name>/annotations.npy   (uint8, 0=background, 1..N=features)
 
@@ -142,7 +146,7 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
             f"{run_name}   Z={state['z']}/{z_pixels - 1}   "
             f"painting: [{current_label()}] {name}   brush r={state['brush']}\n"
             "drag to paint · scroll/slider to change slice · keys 0-{} pick class · "
-            "brush slider or [ / ] to resize · u=undo last stroke".format(n_classes),
+            "brush slider or [ / ] to resize · f=fill whole slice · u=undo last stroke".format(n_classes),
             fontsize=9,
         )
 
@@ -200,6 +204,21 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
         overlay.set_data(ann[z])
         fig.canvas.draw_idle()
 
+    def fill_slice():
+        """Label the ENTIRE current Z-slice with the current class.
+
+        This is the workflow for whole-slice (model.type: slice) training and
+        for marking a whole slice as junk/frost: one action paints the full
+        slice rather than brushing voxel-by-voxel. Undoable like a brush stroke.
+        """
+        z = state["z"]
+        _undo_stack.append((z, ann[z].copy()))
+        if len(_undo_stack) > 20:
+            _undo_stack.pop(0)
+        ann[z] = current_label()
+        overlay.set_data(ann[z])
+        fig.canvas.draw_idle()
+
     def on_press(event):
         if event.inaxes is ax and event.button == 1:
             state["painting"] = True
@@ -232,6 +251,8 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
             delta = 1 if k == "]" else -1
             new_r = max(BRUSH_MIN, min(BRUSH_MAX, state["brush"] + delta))
             slider_brush.set_val(new_r)   # triggers on_brush -> updates state + title
+        elif k.lower() == "f":
+            fill_slice()
         elif k.lower() == "u":
             if _undo_stack:
                 z, prev = _undo_stack.pop()
@@ -269,6 +290,11 @@ def paint_run(tomo: np.ndarray, ann: np.ndarray, features: list[dict],
     ax_save = fig.add_axes([0.88, 0.76 - (n_classes + 1) * 0.05 - 0.02, 0.09, 0.045])
     btn_erase = Button(ax_erase, "Erase: off")
     btn_save = Button(ax_save, "Save")
+
+    # Fill-slice button (whole-slice labeling for "slice" training / junk-frost)
+    ax_fill = fig.add_axes([0.78, 0.76 - (n_classes + 1) * 0.05 - 0.075, 0.19, 0.045])
+    btn_fill = Button(ax_fill, "Fill slice (f)")
+    btn_fill.on_clicked(lambda event: fill_slice())
 
     def toggle_erase(event):
         state["erase"] = not state["erase"]

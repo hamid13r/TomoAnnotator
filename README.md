@@ -56,6 +56,32 @@ report.py                 → results/report.md
 
 ---
 
+## Getting it from S3
+
+The whole project (code + data, ~12 GB) lives in the shared bucket
+`s3://scrippsresearch-tomoannotator/TomoAnnotator/`. If you have access to the
+AWS account, pull it with the helper script:
+
+```bash
+# With your SSO profile:
+bash scripts/pull_from_s3.sh <your-sso-profile> ./TomoAnnotator
+
+# On EC2 with an instance profile attached (no profile needed):
+bash scripts/pull_from_s3.sh "" ./TomoAnnotator
+```
+
+Or directly:
+
+```bash
+aws s3 sync s3://scrippsresearch-tomoannotator/TomoAnnotator/ ./TomoAnnotator/ --region us-west-2
+```
+
+`aws s3 sync` is resumable and only transfers changed/missing files, so it's
+safe to re-run. **Maintainers** push updates back up with
+`bash scripts/push_to_s3.sh <your-sso-profile>`.
+
+---
+
 ## Setup
 
 ```bash

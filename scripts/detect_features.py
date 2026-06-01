@@ -113,6 +113,73 @@ def detect(tomo: np.ndarray, model: nn.Module, patch_size: int,
     return heatmap, (zs, ys, xs)
 
 
+def resize_slice(sl: np.ndarray, box: int, order: int = 1) -> np.ndarray:
+    """Resize a 2D slice to (box, box) — mirrors extract_patches.resize_slice."""
+    from scipy.ndimage import zoom
+    fy, fx = box / sl.shape[0], box / sl.shape[1]
+    out = zoom(sl.astype(np.float32), (fy, fx), order=order)[:box, :box]
+    if out.shape != (box, box):
+        padded = np.zeros((box, box), dtype=np.float32)
+        padded[:out.shape[0], :out.shape[1]] = out
+        out = padded
+    return out
+
+
+@torch.no_grad()
+def detect_slices(tomo: np.ndarray, model: nn.Module, box: int,
+                  device: torch.device, batch_size: int = 32):
+    """Classify every full Z-slice (whole-slice model). Returns:
+        probs : (nz, n_classes)   per-slice class probabilities
+        zs    : (nz,)             slice indices (here, every slice)
+    """
+    zs = np.arange(tomo.shape[0])
+    all_probs, batch = [], []
+
+    def flush():
+        if not batch:
+            return
+        arr = np.stack(batch).astype(np.float32)[:, None]   # (B, 1, box, box)
+        logits = model(torch.from_numpy(arr).to(device))
+        all_probs.append(torch.softmax(logits, dim=1).cpu().numpy())
+        batch.clear()
+
+    for z in tqdm(zs, desc="Classifying slices", leave=False):
+        batch.append(resize_slice(tomo[z], box))
+        if len(batch) >= batch_size:
+            flush()
+    flush()
+    return np.concatenate(all_probs, axis=0), zs
+
+
+def summarize_slices(probs: np.ndarray, zs: np.ndarray, class_names: list[str],
+                     confidence_threshold: float, min_slices: int) -> list[dict]:
+    """Aggregate per-slice probabilities → per-feature presence report."""
+    results = []
+    for c, name in enumerate(class_names):
+        if name == "background":
+            continue
+        col = probs[:, c]
+        above = col > confidence_threshold
+        n_above = int(above.sum())
+        present = n_above >= min_slices
+        if n_above > 0:
+            zi = np.where(above)[0]
+            z_min, z_max = int(zs[zi.min()]), int(zs[zi.max()])
+            z_range = f"{z_min}–{z_max}"
+            mean_conf = float(col[above].mean())
+        else:
+            z_range, mean_conf = "n/a", 0.0
+        results.append({
+            "feature": name,
+            "present": present,
+            "max_confidence": float(col.max()),
+            "mean_confidence_above_threshold": mean_conf,
+            "patches_detected": n_above,   # here: # of slices above threshold
+            "z_range": z_range,
+        })
+    return results
+
+
 def summarize(heatmap: np.ndarray, zs: np.ndarray, class_names: list[str],
               confidence_threshold: float, min_patches: int) -> list[dict]:
     """Aggregate heatmap → per-feature presence report."""
@@ -192,8 +259,30 @@ def process_tomogram(tomo_path: Path, model, class_names, patch_size, device,
                      stride_fraction, confidence_threshold, min_patches,
                      model_type: str = "3d", in_channels: int = 1,
                      save_heatmaps: bool = False,
-                     save_segmentation: bool = True) -> list[dict]:
+                     save_segmentation: bool = True,
+                     min_slices: int = 2) -> list[dict]:
     tomo = np.load(tomo_path).astype(np.float32)
+
+    # Whole-slice model: classify each Z-slice, no sliding window.
+    if model_type == "slice":
+        probs, zs = detect_slices(tomo, model, patch_size, device)
+        results = summarize_slices(probs, zs, class_names,
+                                   confidence_threshold, min_slices)
+        if save_segmentation:
+            # Per-slice label volume: each whole slice gets its argmax class
+            # (below threshold → background).
+            seg = np.zeros(tomo.shape, dtype=np.uint8)
+            top = probs.argmax(axis=1).astype(np.uint8)
+            top[probs.max(axis=1) < confidence_threshold] = 0
+            for zi, z in enumerate(zs):
+                seg[z] = top[zi]
+            seg_path = tomo_path.parent / "segmentation.npy"
+            np.save(seg_path, seg)
+            present = ", ".join(f"{class_names[c]}={int((seg == c).sum())}"
+                                for c in np.unique(seg) if c != 0) or "nothing above threshold"
+            print(f"  Segmentation saved: {seg_path}  [{present}]")
+        return results
+
     heatmap, (zs, ys, xs) = detect(tomo, model, patch_size, stride_fraction, device,
                                    model_type=model_type, in_channels=in_channels)
     results = summarize(heatmap, zs, class_names, confidence_threshold, min_patches)
@@ -266,6 +355,7 @@ def main():
             model_type=model_type, in_channels=in_channels,
             save_heatmaps=args.save_heatmaps,
             save_segmentation=args.save_segmentation,
+            min_slices=det_cfg.get("min_slices_detected", 2),
         )
         print_results(run_name, results)
         for r in results:
